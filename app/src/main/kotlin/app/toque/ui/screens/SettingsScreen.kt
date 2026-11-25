@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -68,6 +69,7 @@ class SettingsScreen(a: MainActivity, private val startOn: Family? = null) : Scr
     private var openList: PopupWindow? = null
     private lateinit var modeRow: LinearLayout
     private lateinit var twinBox: LinearLayout
+    private lateinit var applyRow: LinearLayout
     private lateinit var host: EditText
     private lateinit var port: EditText
     private lateinit var syncText: TextView
@@ -588,14 +590,22 @@ class SettingsScreen(a: MainActivity, private val startOn: Family? = null) : Scr
         modeRow = Ui.horizontal(c)
         p.addView(setting(Ui.text(c, tr("Machine"), 18f, Ui.TEXT), modeRow), Ui.lp(t = 4))
         twinBox = Ui.horizontal(c)
-        host = field(a.prefs.twinHost, tr("Hôte"))
-        port = field(a.prefs.twinPort.toString(), "Port").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        host = field(a.prefs.twinHost, tr("Hôte")).apply {
+            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NEXT
+            setOnFocusChangeListener { _, has -> if (has && a.keyboardHeight > 0) Ui.revealInScroll(pane, twinBox, applyRow, 10) }
+        }
+        port = field(a.prefs.twinPort.toString(), "Port").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
+            setOnEditorActionListener { _, _, _ -> a.hideKeyboard(); true }
+            setOnFocusChangeListener { _, has -> if (has && a.keyboardHeight > 0) Ui.revealInScroll(pane, twinBox, applyRow, 10) }
+        }
         twinBox.addView(host, LinearLayout.LayoutParams(0, Ui.u(52), 1f).apply { rightMargin = Ui.u(10) })
         twinBox.addView(port, LinearLayout.LayoutParams(Ui.u(120), Ui.u(52)))
         p.addView(twinBox, Ui.lp(t = 8))
         linkText = hint("")
-        p.addView(setting(linkText, Ui.button(c, tr("Appliquer"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 52, textSize = 18f) { applyMode() }),
-            Ui.lp(t = 8, b = 8))
+        applyRow = setting(linkText, Ui.button(c, tr("Appliquer"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 52, textSize = 18f) { applyMode() })
+        p.addView(applyRow, Ui.lp(t = 8, b = 8))
         renderModes()
         line(p)
 
@@ -861,6 +871,7 @@ class SettingsScreen(a: MainActivity, private val startOn: Family? = null) : Scr
     }
 
     private fun applyMode() {
+        a.hideKeyboard()
         if (a.snapshot.busy) {
             a.toast(tr("Arrêtez d'abord le programme en cours"), Ui.WARN)
             return
@@ -1187,6 +1198,10 @@ class SettingsScreen(a: MainActivity, private val startOn: Family? = null) : Scr
         unsubSite = null
         unsubMealie?.invoke()
         unsubMealie = null
+    }
+
+    override fun onKeyboard(visible: Boolean) {
+        if (visible && family == Family.ADVANCED && (host.hasFocus() || port.hasFocus())) Ui.revealInScroll(pane, twinBox, applyRow, 10)
     }
 
     override fun onSnapshot(s: Snapshot) {

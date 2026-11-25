@@ -991,5 +991,6 @@
   "%d retirée(s)": "%d removed",
   "%d illisible(s)": "%d unreadable",
   "Déjà à jour": "Already up to date",
-  "Autres": "Other"
+  "Autres": "Other",
+  "Masquer le clavier": "Hide keyboard"
 }

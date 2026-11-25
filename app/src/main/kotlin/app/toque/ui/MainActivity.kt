@@ -3,8 +3,10 @@ package app.toque.ui
 import app.toque.core.companion.CommandResult
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Rect
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,8 +14,10 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -54,10 +58,22 @@ class MainActivity : Activity() {
     lateinit var app: ToqueApp
         private set
     private lateinit var root: FrameLayout
+    private lateinit var column: LinearLayout
     private lateinit var content: FrameLayout
     private lateinit var overlay: FrameLayout
     private lateinit var topBar: TopBar
     private lateinit var machineBar: MachineBar
+    private val visibleFrame = Rect()
+    private val rootLoc = IntArray(2)
+    private val imm by lazy { getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager }
+    /** Hauteur du clavier virtuel à l'écran (0 quand il est fermé). */
+    var keyboardHeight = 0
+        private set
+    /** Marge basse à appliquer dans [root] au-dessus du clavier (0 si [adjustResize] a déjà réduit [root]). */
+    var keyboardMargin = 0
+        private set
+    /** Appelé quand le clavier s'ouvre ou se ferme pendant qu'une fenêtre modale est ouverte. */
+    var overlayOnKeyboard: ((Boolean) -> Unit)? = null
     private val stack = ArrayList<Screen>()
     private val main = Handler(Looper.getMainLooper())
     private var unsubscribe: (() -> Unit)? = null
@@ -106,18 +122,25 @@ class MainActivity : Activity() {
 
         root = FrameLayout(this)
         root.background = Ui.background()
-        val column = Ui.vertical(this)
+        root.isFocusable = true
+        root.isFocusableInTouchMode = true
+        if (Build.VERSION.SDK_INT >= 26) root.defaultFocusHighlightEnabled = false
+        column = Ui.vertical(this)
         topBar = TopBar(this)
         column.addView(topBar, Ui.lp(Ui.MATCH, Ui.u(TopBar.HEIGHT)))
         content = FrameLayout(this)
         column.addView(content, Ui.lp(Ui.MATCH, 0, 1f))
         machineBar = MachineBar(this)
+        machineBar.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop) machineBar.post { spareMachineBar() }
+        }
         column.addView(machineBar, Ui.lp(Ui.MATCH, Ui.WRAP))
         root.addView(column, Ui.flp())
         overlay = FrameLayout(this)
         overlay.visibility = View.GONE
         root.addView(overlay, Ui.flp())
         setContentView(root)
+        root.viewTreeObserver.addOnGlobalLayoutListener { updateKeyboardInset() }
         timerAlarm = TimerAlarm(this, root)
         standby = Standby(this, root)
         splash = Splash(this, root)
@@ -370,16 +393,51 @@ class MainActivity : Activity() {
     /** Hauteur de la barre machine quand elle est affichée (à laisser libre), 0 sinon. */
     fun machineBarSpace(): Int = if (machineBar.visibility == View.VISIBLE) machineBar.height.takeIf { it > 0 } ?: Ui.u(MachineBar.HEIGHT) else 0
 
+    private fun setBottomMargin(v: View, want: Int) {
+        val lp = v.layoutParams as FrameLayout.LayoutParams
+        if (lp.bottomMargin != want) {
+            lp.bottomMargin = want
+            v.layoutParams = lp
+        }
+    }
+
     private fun spareMachineBar() {
         val bottom = machineBarSpace()
-        timerAlarm.spare(bottom)
-        if (overlay.visibility == View.VISIBLE) {
-            val lp = overlay.layoutParams as FrameLayout.LayoutParams
-            val want = if (overlaySparesBar) bottom else 0
-            if (lp.bottomMargin != want) {
-                lp.bottomMargin = want
-                overlay.layoutParams = lp
-            }
+        timerAlarm.spare(keyboardMargin + bottom)
+        if (overlayShown) setBottomMargin(overlay, keyboardMargin + if (overlaySparesBar) bottom else 0)
+        toastView?.let { setBottomMargin(it, maxOf(Ui.u(110), keyboardMargin + bottom + Ui.u(16))) }
+    }
+
+    /**
+     * En mode plein écran immersif, Android ne réduit pas toujours le contenu au-dessus du clavier :
+     * on mesure la zone réellement visible ([getWindowVisibleDisplayFrame]) pour remonter l'écran,
+     * les fenêtres modales et les messages au-dessus du clavier, et proposer de le masquer.
+     */
+    private fun updateKeyboardInset() {
+        val decorH = window.decorView.height
+        if (decorH <= 0 || root.height <= 0) return
+        window.decorView.getWindowVisibleDisplayFrame(visibleFrame)
+        val rawKb = (decorH - visibleFrame.bottom).coerceAtLeast(0)
+        val kb = if (rawKb > Ui.u(90)) rawKb else 0
+        val margin = if (kb > 0) {
+            root.getLocationInWindow(rootLoc)
+            (rootLoc[1] + root.height - visibleFrame.bottom).coerceAtLeast(0)
+        } else 0
+        if (kb == keyboardHeight && margin == keyboardMargin) return
+        val wasShown = keyboardHeight > 0
+        keyboardHeight = kb
+        keyboardMargin = margin
+        setBottomMargin(column, margin)
+        val nowShown = kb > 0
+        topBar.setKeyboardVisible(nowShown && !overlayShown)
+        spareMachineBar()
+        if (wasShown != nowShown) {
+            current?.onKeyboard(nowShown)
+            overlayOnKeyboard?.invoke(nowShown)
+            if (!nowShown) immersive()
+        }
+        if (nowShown) (currentFocus as? EditText)?.let { f ->
+            f.post { f.bringPointIntoView(f.selectionEnd.coerceAtLeast(0)) }
         }
     }
 
@@ -490,6 +548,7 @@ class MainActivity : Activity() {
         content.addView(v, Ui.flp())
         topBar.setTitle(s.title, s.titleCounter, stack.size > 1)
         s.onShow()
+        s.onKeyboard(false)
         s.onSnapshot(snapshot)
     }
 
@@ -532,7 +591,7 @@ class MainActivity : Activity() {
         }
         // Message de fin de minuteur, ou fenêtre ouverte : la molette agit sur eux, jamais sur l'écran dessous ;
         // une fenêtre sans réglage de molette (confirmation) ne se valide pas d'un appui de molette.
-        if (!isBack && (timerAlarm.shown || overlay.visibility == View.VISIBLE) && currentFocus !is android.widget.EditText) {
+        if (!isBack && (timerAlarm.shown || overlayShown && currentFocus !is EditText)) {
             val k = knobKind(event.keyCode)
             if (k != 0) {
                 if (event.action == KeyEvent.ACTION_DOWN) {
@@ -542,7 +601,7 @@ class MainActivity : Activity() {
                 return true
             }
         }
-        if (!isBack && event.action == KeyEvent.ACTION_DOWN && overlay.visibility != View.VISIBLE) {
+        if (!isBack && event.action == KeyEvent.ACTION_DOWN && !overlayShown) {
             val k = event.keyCode
             // Par défaut : les flèches, et les touches du bouton du robot (clavier mtk-kpd :
             // F6 à droite, F7 à gauche, F5 à l'appui).
@@ -557,7 +616,7 @@ class MainActivity : Activity() {
             }
             val s = current
             if ((left || right || press) && !prefs.knobSetupDone) prefs.knobSetupDone = true
-            if (s != null && currentFocus !is android.widget.EditText) {
+            if (s != null && currentFocus !is EditText) {
                 if (left && s.onKnob(-1)) return true
                 if (right && s.onKnob(1)) return true
                 if (press && s.onKnobPress()) return true
@@ -694,7 +753,7 @@ class MainActivity : Activity() {
         t.gravity = Gravity.CENTER
         t.maxWidth = Ui.u(820)
         val lp = Ui.flp(Ui.WRAP, Ui.WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
-        lp.bottomMargin = Ui.u(110)
+        lp.bottomMargin = maxOf(Ui.u(110), keyboardMargin + machineBarSpace() + Ui.u(16))
         root.addView(t, lp)
         toastView = t
         t.alpha = 0f
@@ -717,7 +776,10 @@ class MainActivity : Activity() {
     fun showOverlay(card: View, width: Int = 640, dismissOnScrim: Boolean = true, spareMachineBar: Boolean = false) {
         hideKeyboard()
         overlayKnob = null
+        overlayOnKeyboard = null
         overlaySparesBar = spareMachineBar
+        column.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        topBar.setKeyboardVisible(false)
         overlay.removeAllViews()
         overlay.setBackgroundColor(Ui.SCRIM)
         overlay.isClickable = true
@@ -731,10 +793,14 @@ class MainActivity : Activity() {
     }
 
     fun closeOverlay() {
+        if (keyboardHeight > 0 || currentFocus is EditText) hideKeyboard()
         overlay.visibility = View.GONE
         overlay.removeAllViews()
         overlayKnob = null
+        overlayOnKeyboard = null
         overlaySparesBar = false
+        column.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        topBar.setKeyboardVisible(false)
     }
 
     /** Dialogue de confirmation. */
@@ -806,9 +872,22 @@ class MainActivity : Activity() {
         immersive()
     }
 
+    fun showKeyboard(field: View, afterPost: (() -> Unit)? = null) {
+        field.requestFocus()
+        field.post {
+            imm.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
+            afterPost?.invoke()
+        }
+    }
+
     fun hideKeyboard() {
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        currentFocus?.let { imm.hideSoftInputFromWindow(it.windowToken, 0) }
+        val focused = currentFocus
+        val token = focused?.windowToken ?: window.decorView.windowToken
+        imm.hideSoftInputFromWindow(token, 0)
+        if (focused is EditText) {
+            focused.clearFocus()
+            root.requestFocus()
+        }
     }
 
     // ------------------------------------------------------------------ appli d'origine

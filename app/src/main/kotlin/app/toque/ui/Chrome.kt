@@ -32,6 +32,8 @@ abstract class Screen(val a: MainActivity) {
     open fun onHide() {}
     open fun onSnapshot(s: Snapshot) {}
     open fun onEvent(e: MachineEvent) {}
+    /** Le clavier virtuel s'ouvre ou se referme. */
+    open fun onKeyboard(visible: Boolean) {}
     /** L'écran joue lui-même le son de fin de ce programme (fin de recette) : pas de bip habituel. */
     open fun ownsFinishSound(e: MachineEvent): Boolean = false
     open fun onKnob(delta: Int): Boolean = false
@@ -72,6 +74,20 @@ class TopBar(private val a: MainActivity) : LinearLayout(a) {
     private val bowl = barChip(tr("Bol retiré"), Icon.Kind.POT, Ui.WARN, 0x33FFC14D)
     private val link = barChip("", Icon.Kind.LINK, Ui.TEXT2)
     private val clock = barChip("", Icon.Kind.CLOCK, Ui.TEXT)
+    private val hideKeyboard = barChip(tr("Masquer le clavier"), Icon.Kind.KEYBOARD_HIDE, Ui.ACCENT_INK, Ui.ACCENT_DIM).apply {
+        val r = ITEM / 2f
+        val vInset = Ui.u((TOUCH - ITEM) / 2)
+        background = InsetDrawable(Ui.pressable(Ui.round(Ui.ACCENT_DIM, r, Ui.ACCENT_INK, 1.5f), r), 0, vInset, 0, vInset)
+        setPadding(Ui.u(16), 0, Ui.u(18), 0)
+        contentDescription = tr("Masquer le clavier")
+        isClickable = true
+        visibility = View.GONE
+        setOnClickListener { a.hideKeyboard() }
+    }
+    private val hideKeyboardLabel = Ui.chipText(hideKeyboard)
+    private var keyboardOpen = false
+    private var barCrowded = false
+    private var linkAlert = false
     private val home = Icon(a, Icon.Kind.HOME, Ui.TEXT)
     /** Minuteur de cuisine : bouton rond au repos, pastille orange (temps restant, nombre) quand il en tourne. */
     private val timerButton = Icon(a, Icon.Kind.TIMER, Ui.TEXT)
@@ -128,6 +144,7 @@ class TopBar(private val a: MainActivity) : LinearLayout(a) {
         addView(temp, chipParams(10))
         addView(link, chipParams(10))
         addView(clock, chipParams(8))
+        addView(hideKeyboard, LayoutParams(Ui.WRAP, Ui.u(TOUCH)).apply { rightMargin = Ui.u(8) })
         roundButton(home) { a.home() }
         addView(home, LayoutParams(Ui.u(TOUCH), Ui.u(TOUCH)))
         lid.visibility = View.GONE
@@ -201,6 +218,7 @@ class TopBar(private val a: MainActivity) : LinearLayout(a) {
         val first = running.firstOrNull()
         timerButton.visibility = if (first == null) View.VISIBLE else View.GONE
         timerChip.visibility = if (first == null) View.GONE else View.VISIBLE
+        refreshKeyboardBar()
         if (first == null) return
         val text = Ui.clock(first.remaining(t.now()))
         if (timerText.text.toString() != text) timerText.text = text
@@ -221,6 +239,30 @@ class TopBar(private val a: MainActivity) : LinearLayout(a) {
         home.visibility = if (canGoBack) View.VISIBLE else View.GONE
     }
 
+    /** Affiche le bouton « Masquer le clavier » et libère la place occupée par la liaison et l'heure. */
+    fun setKeyboardVisible(visible: Boolean) {
+        if (keyboardOpen == visible) return
+        keyboardOpen = visible
+        refreshKeyboardBar()
+    }
+
+    private fun refreshKeyboardBar() {
+        hideKeyboard.visibility = if (keyboardOpen) View.VISIBLE else View.GONE
+        clock.visibility = if (keyboardOpen) View.GONE else View.VISIBLE
+        link.visibility = if (!keyboardOpen || linkAlert) View.VISIBLE else View.GONE
+        if (!keyboardOpen) return
+        // Plusieurs alertes ouvertes en même temps : la pastille garde sa seule icône pour ne jamais pousser Accueil hors de 1024 px.
+        val alerts = (if (lid.visibility == View.VISIBLE) 1 else 0) +
+            (if (bowl.visibility == View.VISIBLE) 1 else 0) +
+            (if (timerChip.visibility == View.VISIBLE) 1 else 0)
+        val crowded = linkAlert || alerts >= 2
+        if (crowded == barCrowded) return
+        barCrowded = crowded
+        hideKeyboardLabel.visibility = if (crowded) View.GONE else View.VISIBLE
+        hideKeyboard.setPadding(Ui.u(if (crowded) 14 else 16), 0, Ui.u(if (crowded) 14 else 18), 0)
+        (hideKeyboard.getChildAt(0).layoutParams as LayoutParams).rightMargin = Ui.u(if (crowded) 0 else 6)
+    }
+
     fun update(s: Snapshot) {
         lid.visibility = if (s.hasSample && s.lidOpen) View.VISIBLE else View.GONE
         // Bol retiré : pour la base le couvercle est « ouvert », mais ce n'est pas lui qu'il faut fermer.
@@ -237,6 +279,8 @@ class TopBar(private val a: MainActivity) : LinearLayout(a) {
             tempIcon.color = col
         } else temp.visibility = View.GONE
         showHot(s.hot)
+        linkAlert = s.hasFault || s.link == LinkState.LOST
+        refreshKeyboardBar()
         val mode = a.prefs.mode
         val simulated = mode != Prefs.Mode.HARDWARE
         val (label, color) = when {

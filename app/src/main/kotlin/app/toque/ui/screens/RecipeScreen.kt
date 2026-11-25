@@ -1,12 +1,10 @@
 package app.toque.ui.screens
 
-import android.content.Context
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -447,19 +445,15 @@ class RecipeScreen(a: MainActivity, val recipe: Recipe) : Screen(a) {
      */
     private fun editor(title: String, detail: String, value: String, hint: String, lines: Int = 1, number: Boolean = false,
                        reset: String?, onDone: (String?) -> Boolean) {
-        val card = Ui.card(c, 28f, Ui.SURFACE2)
-        card.setPadding(Ui.u(32), Ui.u(26), Ui.u(32), Ui.u(24))
-        card.addView(Ui.text(c, title, 24f, Ui.TEXT, Ui.MEDIUM))
-        if (detail.isNotBlank()) card.addView(Ui.text(c, detail, 17f, Ui.TEXT2).apply { setLineSpacing(0f, 1.15f) }, Ui.lp(t = 8))
         val input = EditText(c).apply {
             setText(value)
             setSelection(text.length)
             this.hint = hint
-            setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.uf(22f))
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, Ui.uf(20f))
             setTextColor(Ui.TEXT)
             setHintTextColor(Ui.TEXT3)
             background = Ui.round(Ui.SURFACE, 16f, Ui.STROKE, 1f)
-            setPadding(Ui.u(16), Ui.u(12), Ui.u(16), Ui.u(12))
+            setPadding(Ui.u(16), Ui.u(10), Ui.u(16), Ui.u(10))
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or (if (lines == 1) EditorInfo.IME_ACTION_DONE else 0)
             if (lines == 1) {
                 setSingleLine()
@@ -478,37 +472,25 @@ class RecipeScreen(a: MainActivity, val recipe: Recipe) : Screen(a) {
                 gravity = Gravity.TOP
             }
         }
-        card.addView(input, Ui.lp(t = 16, b = 20))
-        val imm = c.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         fun finish(text: String?) {
-            if (!onDone(text)) return
-            imm.hideSoftInputFromWindow(input.windowToken, 0)
-            a.closeOverlay()
+            if (onDone(text)) a.closeOverlay()
         }
         input.setOnEditorActionListener { _, action, _ ->
             if (action == EditorInfo.IME_ACTION_DONE) { finish(input.text.toString()); true } else false
         }
         val row = Ui.horizontal(c, Gravity.END or Gravity.CENTER_VERTICAL)
         if (reset != null) {
-            row.addView(Ui.button(c, reset, Ui.Style.GHOST, height = 56, textSize = 17f) { finish(null) })
+            row.addView(Ui.button(c, reset, Ui.Style.GHOST, height = 50, textSize = 17f) { finish(null) })
             row.addView(Ui.spacer(c, weight = 1f), LinearLayout.LayoutParams(0, 1, 1f))
         }
-        row.addView(Ui.button(c, tr("Annuler"), Ui.Style.GHOST, height = 56, textSize = 17f) {
-            imm.hideSoftInputFromWindow(input.windowToken, 0)
-            a.closeOverlay()
-        })
+        row.addView(Ui.button(c, tr("Annuler"), Ui.Style.GHOST, height = 50, textSize = 17f) { a.closeOverlay() })
         row.addView(Ui.spacer(c, w = 12))
-        row.addView(Ui.button(c, tr("Enregistrer"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 56, textSize = 17f) { finish(input.text.toString()) })
-        card.addView(row)
-        a.showOverlay(card, 680, dismissOnScrim = false)
-        // En haut de l'écran : le clavier occupe la moitié basse.
-        (card.layoutParams as FrameLayout.LayoutParams).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            topMargin = Ui.u(14)
+        row.addView(Ui.button(c, tr("Enregistrer"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 50, textSize = 17f) { finish(input.text.toString()) })
+        Ui.showInputOverlay(a, title, input) {
+            if (detail.isNotBlank()) addView(Ui.text(c, detail, 16f, Ui.TEXT2).apply { setLineSpacing(0f, 1.12f) }, Ui.lp(t = 4))
+            addView(input, Ui.lp(t = 8, b = 10))
+            addView(row)
         }
-        card.requestLayout()
-        input.requestFocus()
-        input.post { imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT) }
     }
 
     // ------------------------------------------------------------------ avis

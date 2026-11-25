@@ -13,7 +13,7 @@ class Icon(context: Context, var kind: Kind, color: Int) : View(context) {
         BACK, SEARCH, PLAY, PAUSE, STOP, THERMO, SPEED, CLOCK, REVERSE, SCALE, BOOK, STAR, STAR_FILLED,
         SETTINGS, PLUS, MINUS, CHECK, CLOSE, KNEAD, STEAM, FLAME, BOLT, SYNC, LID, WARNING, HOME, WHISK,
         CHEVRON, LINK, INFO, POT, TIMER, DROP, EDIT, TRASH, PEOPLE, DOWNLOAD, UPLOAD, GLOBE, BELL,
-        PHONE, WARNING_FILLED, SCREEN, KNOB,
+        PHONE, WARNING_FILLED, SCREEN, KNOB, KEYBOARD_HIDE,
     }
 
     var color: Int = color
@@ -223,6 +223,14 @@ class Icon(context: Context, var kind: Kind, color: Int) : View(context) {
             Kind.KNOB -> {
                 canvas.drawCircle(12f, 12f, 8.5f, stroke); canvas.drawCircle(12f, 12f, 3.5f, stroke)
                 canvas.drawLine(12f, 3.5f, 12f, 6.5f, stroke)
+            }
+            Kind.KEYBOARD_HIDE -> {
+                rect.set(2.5f, 3.5f, 21.5f, 14.5f); canvas.drawRoundRect(rect, 2.2f, 2.2f, stroke)
+                canvas.drawCircle(6.5f, 7.2f, 1f, fill); canvas.drawCircle(10.2f, 7.2f, 1f, fill)
+                canvas.drawCircle(13.8f, 7.2f, 1f, fill); canvas.drawCircle(17.5f, 7.2f, 1f, fill)
+                canvas.drawCircle(6.5f, 10.8f, 1f, fill); canvas.drawCircle(17.5f, 10.8f, 1f, fill)
+                canvas.drawLine(9.2f, 10.8f, 14.8f, 10.8f, stroke)
+                p.moveTo(8.5f, 17.5f); p.lineTo(12f, 21f); p.lineTo(15.5f, 17.5f); canvas.drawPath(p, stroke)
             }
         }
         canvas.restore()

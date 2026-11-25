@@ -9,13 +9,13 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import app.toque.core.i18n.tr
 import app.toque.core.machine.JobKind
+import app.toque.core.machine.Snapshot
 import app.toque.core.recipes.Ingredient
 import app.toque.core.recipes.IngredientGroup
 import app.toque.core.recipes.Recipe
@@ -28,6 +28,7 @@ import app.toque.core.recipes.StepSettings
 import app.toque.core.recipes.UserRecipes
 import app.toque.core.recipes.Weigh
 import app.toque.ui.Icon
+import app.toque.ui.MachineBar
 import app.toque.ui.MainActivity
 import app.toque.ui.Screen
 import app.toque.ui.Ui
@@ -101,8 +102,36 @@ private object Edit {
         return b
     }
 
-    fun hideKeyboard(v: View) {
-        (v.context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
+    /** Resserre la mise en page quand le clavier est ouvert et masque les actions si la barre machine s'ajoute. */
+    class CompactLayout(
+        private val root: LinearLayout,
+        private val actions: LinearLayout,
+        private val normalBtnH: Int,
+        private val normalTop: Int,
+        private val primary: View,
+        private val secondary: View?,
+    ) {
+        private var lastKb = false
+        private var lastHide = false
+
+        fun updateBar(machineBarShown: Boolean) = update(lastKb, machineBarShown)
+
+        fun update(kb: Boolean, machineBarShown: Boolean) {
+            val hide = kb && machineBarShown
+            if (kb != lastKb) {
+                lastKb = kb
+                root.setPadding(Ui.u(24), Ui.u(if (kb) 4 else 6), Ui.u(24), Ui.u(if (kb) 8 else 18))
+                val h = Ui.u(if (kb) 50 else normalBtnH)
+                primary.minimumHeight = h
+                secondary?.minimumHeight = h
+                (actions.layoutParams as LinearLayout.LayoutParams).topMargin = Ui.u(if (kb) 6 else normalTop)
+                actions.requestLayout()
+            }
+            if (hide != lastHide) {
+                lastHide = hide
+                actions.visibility = if (hide) View.GONE else View.VISIBLE
+            }
+        }
     }
 }
 
@@ -139,6 +168,7 @@ class RecipeEditScreen(a: MainActivity, private val start: Recipe, private val i
     private val metaBox by lazy { Ui.vertical(c) }
     private val ingredientsBox by lazy { Ui.vertical(c) }
     private val stepsBox by lazy { Ui.vertical(c) }
+    private var compact: Edit.CompactLayout? = null
 
     /**
      * Dernière ligne retirée, que « Rétablir » remet en place pendant quelques secondes : la liste des
@@ -160,7 +190,7 @@ class RecipeEditScreen(a: MainActivity, private val start: Recipe, private val i
         form.addView(Edit.label(c, tr("Titre")))
         val titleInput = Edit.field(c, draft.title, tr("Ex. : Soupe de potiron"))
         Edit.onChange(titleInput) { t -> if (t != draft.title) { draft = draft.copy(title = t); dirty = true } }
-        titleInput.setOnEditorActionListener { v, _, _ -> Edit.hideKeyboard(v); v.clearFocus(); true }
+        titleInput.setOnEditorActionListener { _, _, _ -> a.hideKeyboard(); true }
         form.addView(titleInput, Ui.lp(Ui.MATCH, Ui.WRAP, t = 6))
         renderMeta()
         form.addView(metaBox, Ui.lp(t = 14))
@@ -174,14 +204,13 @@ class RecipeEditScreen(a: MainActivity, private val start: Recipe, private val i
         left.addView(Ui.scroll(c, form), LinearLayout.LayoutParams(Ui.MATCH, 0, 1f))
 
         val actions = Ui.horizontal(c)
-        actions.addView(Ui.button(c, tr("Enregistrer"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 62, textSize = 20f) { save() },
-            LinearLayout.LayoutParams(0, Ui.WRAP, 1f))
-        if (!isNew) {
-            actions.addView(Ui.button(c, "", Ui.Style.GHOST, Icon.Kind.TRASH, height = 62) { delete() }.apply {
-                contentDescription = tr("Supprimer la recette")
-            }, Ui.lp(Ui.WRAP, Ui.WRAP, l = 12))
-        }
+        val saveBtn = Ui.button(c, tr("Enregistrer"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 62, textSize = 20f) { save() }
+        actions.addView(saveBtn, LinearLayout.LayoutParams(0, Ui.WRAP, 1f))
+        val deleteBtn = if (isNew) null else Ui.button(c, "", Ui.Style.GHOST, Icon.Kind.TRASH, height = 62) { delete() }.apply {
+            contentDescription = tr("Supprimer la recette")
+        }.also { actions.addView(it, Ui.lp(Ui.WRAP, Ui.WRAP, l = 12)) }
         left.addView(actions, Ui.lp(t = 10))
+        compact = Edit.CompactLayout(root, actions, 62, 10, saveBtn, deleteBtn)
         root.addView(left, LinearLayout.LayoutParams(0, Ui.MATCH, 0.42f).apply { rightMargin = Ui.u(24) })
 
         // ---- droite : les étapes
@@ -197,6 +226,14 @@ class RecipeEditScreen(a: MainActivity, private val start: Recipe, private val i
         box.addView(Ui.scroll(c, steps), Ui.lp(Ui.MATCH, Ui.MATCH))
         root.addView(box, LinearLayout.LayoutParams(0, Ui.MATCH, 0.58f))
         return root
+    }
+
+    override fun onKeyboard(visible: Boolean) {
+        compact?.update(visible, MachineBar.shownFor(a.snapshot))
+    }
+
+    override fun onSnapshot(s: Snapshot) {
+        compact?.updateBar(MachineBar.shownFor(s))
     }
 
     // ------------------------------------------------------------------ personnes, durée, difficulté
@@ -296,18 +333,9 @@ class RecipeEditScreen(a: MainActivity, private val start: Recipe, private val i
     /** Carte de saisie d'un ingrédient ; « Suivant » enchaîne sur le suivant sans fermer. */
     private fun editIngredient(index: Int?) {
         val current = index?.let { draft.allIngredients.getOrNull(it) }
-        val card = Ui.card(c, 28f, Ui.SURFACE2)
-        card.setPadding(Ui.u(32), Ui.u(24), Ui.u(32), Ui.u(22))
-        card.addView(Ui.text(c, if (current == null) tr("Ajouter un ingrédient") else tr("Modifier l'ingrédient"), 24f, Ui.TEXT, Ui.MEDIUM))
         val input = Edit.field(c, current?.display.orEmpty(), tr("Ex. : 500 g de farine"))
         input.setSelection(input.text.length)
         if (current == null) input.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NEXT
-        card.addView(input, Ui.lp(t = 14, b = 18))
-        val imm = c.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        fun close() {
-            imm.hideSoftInputFromWindow(input.windowToken, 0)
-            a.closeOverlay()
-        }
         fun commit(): Boolean {
             val item = UserRecipes.ingredient(input.text.toString())
             if (current == null) {
@@ -322,30 +350,25 @@ class RecipeEditScreen(a: MainActivity, private val start: Recipe, private val i
         input.setOnEditorActionListener { _, action, _ ->
             when (action) {
                 EditorInfo.IME_ACTION_NEXT -> { if (commit()) input.setText(""); true }
-                EditorInfo.IME_ACTION_DONE -> { commit(); close(); true }
+                EditorInfo.IME_ACTION_DONE -> { commit(); a.closeOverlay(); true }
                 else -> false
             }
         }
         val row = Ui.horizontal(c, Gravity.END or Gravity.CENTER_VERTICAL)
-        row.addView(Ui.button(c, tr("Annuler"), Ui.Style.GHOST, height = 56, textSize = 17f) { close() })
+        row.addView(Ui.button(c, tr("Annuler"), Ui.Style.GHOST, height = 52, textSize = 17f) { a.closeOverlay() })
         if (current == null) {
             row.addView(Ui.spacer(c, w = 12))
-            row.addView(Ui.button(c, tr("Suivant"), Ui.Style.SECONDARY, Icon.Kind.PLUS, height = 56, textSize = 17f) {
+            row.addView(Ui.button(c, tr("Suivant"), Ui.Style.SECONDARY, Icon.Kind.PLUS, height = 52, textSize = 17f) {
                 if (commit()) input.setText("")
-                input.requestFocus()
+                a.showKeyboard(input)
             })
         }
         row.addView(Ui.spacer(c, w = 12))
-        row.addView(Ui.button(c, tr("OK"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 56, textSize = 17f) { commit(); close() })
-        card.addView(row)
-        a.showOverlay(card, 680, dismissOnScrim = false)
-        (card.layoutParams as FrameLayout.LayoutParams).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            topMargin = Ui.u(14)
+        row.addView(Ui.button(c, tr("OK"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 52, textSize = 17f) { commit(); a.closeOverlay() })
+        Ui.showInputOverlay(a, if (current == null) tr("Ajouter un ingrédient") else tr("Modifier l'ingrédient"), input) {
+            addView(input, Ui.lp(t = 10, b = 14))
+            addView(row)
         }
-        card.requestLayout()
-        input.requestFocus()
-        input.post { imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT) }
     }
 
     // ------------------------------------------------------------------ étapes
@@ -542,35 +565,41 @@ class StepEditScreen(
     private var machine: StepMachine? = start.machine
     private var finished = false
     private val settingBox by lazy { Ui.vertical(c) }
+    private var compact: Edit.CompactLayout? = null
 
     override fun build(): View {
         val root = Ui.horizontal(c, Gravity.TOP)
         root.setPadding(Ui.u(24), Ui.u(6), Ui.u(24), Ui.u(18))
 
         val left = Ui.vertical(c)
-        left.addView(Edit.label(c, tr("Ce qu'il faut faire")))
-        val input = Edit.field(c, text, tr("Ex. : Ajouter les oignons et mixer."), lines = 4, size = 20f)
+        val form = Ui.vertical(c)
+        form.addView(Edit.label(c, tr("Ce qu'il faut faire")))
+        val input = Edit.field(c, text, tr("Ex. : Ajouter les oignons et mixer."), lines = 3, size = 20f).apply {
+            setPadding(Ui.u(16), Ui.u(10), Ui.u(16), Ui.u(10))
+        }
         Edit.onChange(input) { text = it }
-        left.addView(input, Ui.lp(Ui.MATCH, Ui.WRAP, t = 6))
-        left.addView(Edit.label(c, tr("À peser (facultatif)")), Ui.lp(t = 18))
+        form.addView(input, Ui.lp(Ui.MATCH, Ui.WRAP, t = 6))
+        form.addView(Edit.label(c, tr("À peser (facultatif)")), Ui.lp(t = 18))
         val weighRow = Ui.horizontal(c)
         val weigh = Edit.field(c, if (grams > 0) grams.toString() else "", "0", number = true)
         Edit.onChange(weigh) { grams = it.trim().toIntOrNull() ?: 0 }
-        weigh.setOnEditorActionListener { v, _, _ -> Edit.hideKeyboard(v); v.clearFocus(); true }
+        weigh.setOnEditorActionListener { _, _, _ -> a.hideKeyboard(); true }
         weighRow.addView(weigh, LinearLayout.LayoutParams(Ui.u(150), Ui.WRAP))
         weighRow.addView(Ui.text(c, "g", 20f, Ui.TEXT2), Ui.lp(Ui.WRAP, Ui.WRAP, l = 10))
-        left.addView(weighRow, Ui.lp(t = 6))
-        left.addView(Ui.text(c, tr("La balance s'affiche à cette étape et sonne une fois le poids atteint."), 16f, Ui.TEXT2).apply { setLineSpacing(0f, 1.15f) }, Ui.lp(t = 6))
-        left.addView(Ui.spacer(c, weight = 1f), LinearLayout.LayoutParams(1, 0, 1f))
+        form.addView(weighRow, Ui.lp(t = 6))
+        form.addView(Ui.text(c, tr("La balance s'affiche à cette étape et sonne une fois le poids atteint."), 16f, Ui.TEXT2)
+            .apply { setLineSpacing(0f, 1.15f) }, Ui.lp(t = 6, b = 6))
+        left.addView(Ui.scroll(c, form), LinearLayout.LayoutParams(Ui.MATCH, 0, 1f))
         val actions = Ui.horizontal(c)
-        if (!isNew) actions.addView(Ui.button(c, tr("Supprimer l'étape"), Ui.Style.GHOST, Icon.Kind.TRASH, height = 58, textSize = 17f) {
+        val deleteBtn = if (isNew) null else Ui.button(c, tr("Supprimer l'étape"), Ui.Style.GHOST, Icon.Kind.TRASH, height = 58, textSize = 17f) {
             finished = true
             a.back()
             onDone(null)
-        }, Ui.lp(Ui.WRAP, Ui.WRAP, r = 12))
-        actions.addView(Ui.button(c, tr("OK"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 58, textSize = 19f) { done() },
-            LinearLayout.LayoutParams(0, Ui.WRAP, 1f))
-        left.addView(actions)
+        }.also { actions.addView(it, Ui.lp(Ui.WRAP, Ui.WRAP, r = 12)) }
+        val okBtn = Ui.button(c, tr("OK"), Ui.Style.PRIMARY, Icon.Kind.CHECK, height = 58, textSize = 19f) { done() }
+        actions.addView(okBtn, LinearLayout.LayoutParams(0, Ui.WRAP, 1f))
+        left.addView(actions, Ui.lp(t = 8))
+        compact = Edit.CompactLayout(root, actions, 58, 8, okBtn, deleteBtn)
         root.addView(left, LinearLayout.LayoutParams(0, Ui.MATCH, 0.5f).apply { rightMargin = Ui.u(24) })
 
         val right = Ui.vertical(c)
@@ -581,6 +610,14 @@ class StepEditScreen(
         right.addView(Ui.scroll(c, settingBox), LinearLayout.LayoutParams(Ui.MATCH, 0, 1f).apply { topMargin = Ui.u(10) })
         root.addView(right, LinearLayout.LayoutParams(0, Ui.MATCH, 0.5f))
         return root
+    }
+
+    override fun onKeyboard(visible: Boolean) {
+        compact?.update(visible, MachineBar.shownFor(a.snapshot))
+    }
+
+    override fun onSnapshot(s: Snapshot) {
+        compact?.updateBar(MachineBar.shownFor(s))
     }
 
     private fun program(p: StepProgram?) {
